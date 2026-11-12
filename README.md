@@ -152,8 +152,10 @@ Users get the patched git, and the build toolchain stays identical to upstream a
 | `overlays.default` | The overlay itself, reusable by other flakes | — |
 | `packages.<system>.git` | Patched git | `nix build .#git` |
 | `packages.<system>.gitFull` | Patched git with all optional features | `nix build .#gitFull` |
+| `packages.<system>.gh` | Patched gh that cannot create issues, pull requests or commits | `nix build .#gh` |
 | `packages.<system>.dockerImage` | Container image tarball | `nix build .#dockerImage` |
-| `checks.<system>.no-force-push` | NixOS VM integration test | `nix build .#checks.x86_64-linux.no-force-push` |
+| `checks.<system>.no-force-push` | NixOS VM integration test for git | `nix build .#checks.x86_64-linux.no-force-push` |
+| `checks.<system>.no-gh-writes` | NixOS VM integration test for gh | `nix build .#checks.x86_64-linux.no-gh-writes` |
 
 Because the overlay is itself an output, **another project can consume it** by adding this repository as an input and applying `overlays.default`. That gets them the same patched git without copying any files. That's composition.
 
@@ -245,6 +247,29 @@ $ podman run --rm git-no-force-push:latest --version
 
 ---
 
+## A second package: gh that cannot create issues, pull requests or commits
+
+The same pattern patches the [GitHub CLI](https://cli.github.com). `third_party/gh/default.nix` appends four patches to nixpkgs' gh, and the overlay adds one line: `gh = import ../third_party/gh { inherit (prev) gh; };`. The dev shell and the container image put `pkgs.gh` on `PATH` next to git.
+
+Like `set_ref_status_for_push` in git, gh has one chokepoint: every command, `gh api` included, gets its GitHub HTTP client from `api.NewHTTPClient`. Patch 001 wraps that client's transport and refuses a request before it leaves the machine.
+
+| Patch | Blocks |
+|---|---|
+| `001-deny-creating-issues-prs-and-commits.patch` | REST: `POST …/issues`, `POST …/pulls`, `POST …/git/commits`, `PUT`/`DELETE …/contents/*`, `POST …/merges`, `POST …/merge-upstream`, `POST …/generate`, `PUT …/pulls/*/merge` and `…/update-branch`, Copilot agent jobs. GraphQL: `createIssue`, `createPullRequest`, `revertPullRequest`, `createCommitOnBranch`, `mergeBranch`, `mergePullRequest`, `updatePullRequestBranch`, `enablePullRequestAutoMerge`, `enqueuePullRequest`, and the mutations that turn cards or drafts into issues |
+| `002-disable-token-output.patch` | `gh auth token`, `gh auth status --show-token`, `gh config get oauth_token`, so the token can't be handed to curl |
+| `003-disable-git-credential-helper.patch` | `gh auth git-credential`, so `git push` can't create commits with gh's token |
+| `004-disable-extensions.patch` | running gh extensions, which build their own HTTP client |
+
+GraphQL mutation names are matched as whole words anywhere in the decoded query, so aliases, comments, fragments and `\u` escapes in the JSON don't get around it. Reads and other writes (comments, labels, closing issues) keep working.
+
+`nix/tests/no-gh-writes.nix` boots a VM with a fake GitHub API (`fake-github.py`) on `api.github.localhost` that logs every request. It first shows that stock gh does create issues, PRs and commits against it, then that the patched gh refuses each route and that the fake server never receives the write.
+
+**Why patch the client instead of the token?** GitHub has no truly read-only token. A fine-grained token with read-only Issues permission can still open issues and comment on any public repository, because anyone signed in may do that ([community discussion](https://github.com/orgs/community/discussions/180063)). So the token can't express "never create an issue", but the client can.
+
+**It raises the bar; it doesn't make writes impossible.** Someone who reads gh's config or keyring can still send the token to the API with curl. That's the same trade-off as the git patch, where `.git` and curl can get around it: the safe path is the only easy one.
+
+---
+
 ## Repository layout
 
 ```
@@ -256,15 +281,23 @@ $ podman run --rm git-no-force-push:latest --version
 │   ├── overlay.nix                 # THE single source of truth: git → patched git
 │   ├── docker.nix                  # OCI image built from pkgs.git
 │   └── tests/
-│       └── no-force-push.nix       # NixOS VM integration test
+│       ├── no-force-push.nix       # NixOS VM integration test for git
+│       ├── no-gh-writes.nix        # NixOS VM integration test for gh
+│       └── fake-github.py          # stand-in GitHub API the gh test talks to
 └── third_party/
-    └── git/
-        ├── default.nix             # overrideAttrs: append our patches to nixpkgs' git
-        ├── 001-disable-force-push.patch
-        ├── 002-disable-force-with-lease-and-plus-refspec.patch
-        ├── 003-remove-force-push-from-docs.patch
-        ├── 004-hide-force-push-options.patch
-        └── 005-disable-http-push-force.patch
+    ├── git/
+    │   ├── default.nix             # overrideAttrs: append our patches to nixpkgs' git
+    │   ├── 001-disable-force-push.patch
+    │   ├── 002-disable-force-with-lease-and-plus-refspec.patch
+    │   ├── 003-remove-force-push-from-docs.patch
+    │   ├── 004-hide-force-push-options.patch
+    │   └── 005-disable-http-push-force.patch
+    └── gh/
+        ├── default.nix             # overrideAttrs: append our patches to nixpkgs' gh
+        ├── 001-deny-creating-issues-prs-and-commits.patch
+        ├── 002-disable-token-output.patch
+        ├── 003-disable-git-credential-helper.patch
+        └── 004-disable-extensions.patch
 ```
 
 `third_party/<name>/` is a convention for local modifications to upstream software. Every custom patch is numbered and named by purpose, and nothing else in the repository needs to know it exists.
@@ -284,8 +317,13 @@ nix build .#git
 devenv shell
 devenv test
 
-# Boot a VM and run the integration test
+# Build the patched gh and try it
+nix build .#gh
+./result/bin/gh api -X POST repos/OWNER/REPO/issues -f title=hi   # → creating issues, pull requests and commits is disabled and not allowed
+
+# Boot a VM and run the integration tests
 nix build .#checks.x86_64-linux.no-force-push -L
+nix build .#checks.x86_64-linux.no-gh-writes -L
 
 # Build and load the container image
 nix build .#dockerImage && podman load -i result   # or: docker load < result

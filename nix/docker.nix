@@ -1,10 +1,10 @@
-# OCI/Docker image shipping the patched git.
+# OCI/Docker image shipping the patched git and gh.
 { pkgs }:
 
 pkgs.dockerTools.buildLayeredImage {
   name = "git-no-force-push";
   tag = "latest";
-  contents = with pkgs; [ git bashInteractive coreutils cacert ];
+  contents = with pkgs; [ git gh bashInteractive coreutils cacert ];
   extraCommands = ''
     mkdir -p tmp work
     chmod 1777 tmp

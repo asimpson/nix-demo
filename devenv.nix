@@ -4,11 +4,12 @@
   # https://devenv.sh/basics/
   env.GREET = "devenv";
 
-  # git with `push --force` disabled (see third_party/git)
+  # git with `push --force` disabled (see third_party/git), and gh that cannot
+  # create issues, pull requests or commits (see third_party/gh)
   overlays = [ (import ./nix/overlay.nix) ];
 
   # https://devenv.sh/packages/
-  packages = [ pkgs.git ];
+  packages = [ pkgs.git pkgs.gh ];
 
   # https://devenv.sh/languages/
   # languages.rust.enable = true;
@@ -67,6 +68,19 @@
       echo "FAIL: +refspec from config force-pushed"; exit 1
     fi
     echo "ok: +refspec from config refused"
+
+    # gh refuses before anything leaves the machine, so no network is needed.
+    for args in "api -X POST repos/owner/repo/issues -f title=t" \
+                "api -X POST repos/owner/repo/pulls -f title=t" \
+                "api graphql -f query=mutation{createCommitOnBranch(input:{}){clientMutationId}}" \
+                "auth token"; do
+      # shellcheck disable=SC2086
+      if out=$(GH_TOKEN=fake-token GH_CONFIG_DIR="$tmp/gh" gh $args 2>&1); then
+        echo "FAIL: gh $args succeeded"; exit 1
+      fi
+      echo "$out" | grep -q "disabled and not allowed" || { echo "FAIL: unexpected output: $out"; exit 1; }
+      echo "ok: gh $args refused"
+    done
   '';
 
   # https://devenv.sh/git-hooks/

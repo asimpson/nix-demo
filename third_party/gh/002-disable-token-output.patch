@@ -1,0 +1,42 @@
+diff --git a/pkg/cmd/auth/status/status.go b/pkg/cmd/auth/status/status.go
+index e4f7213..fdc1c03 100644
+--- a/pkg/cmd/auth/status/status.go
++++ b/pkg/cmd/auth/status/status.go
+@@ -190,6 +190,10 @@ func NewCmdStatus(f *cmdutil.Factory, runF func(*StatusOptions) error) *cobra.Co
+ }
+ 
+ func statusRun(opts *StatusOptions) error {
++	if opts.ShowToken {
++		return errors.New("gh auth status --show-token is disabled and not allowed: this build of gh does not hand out its token")
++	}
++
+ 	cfg, err := opts.Config()
+ 	if err != nil {
+ 		return err
+diff --git a/pkg/cmd/auth/token/token.go b/pkg/cmd/auth/token/token.go
+index d9faac7..aa7a529 100644
+--- a/pkg/cmd/auth/token/token.go
++++ b/pkg/cmd/auth/token/token.go
+@@ -55,6 +55,7 @@ func NewCmdToken(f *cmdutil.Factory, runF func(*TokenOptions) error) *cobra.Comm
+ }
+ 
+ func tokenRun(opts *TokenOptions) error {
++	return errors.New("gh auth token is disabled and not allowed: this build of gh does not hand out its token")
+ 	cfg, err := opts.Config()
+ 	if err != nil {
+ 		return err
+diff --git a/pkg/cmd/config/get/get.go b/pkg/cmd/config/get/get.go
+index 1789248..75b810d 100644
+--- a/pkg/cmd/config/get/get.go
++++ b/pkg/cmd/config/get/get.go
+@@ -53,6 +53,10 @@ func NewCmdConfigGet(f *cmdutil.Factory, runF func(*GetOptions) error) *cobra.Co
+ }
+ 
+ func getRun(opts *GetOptions) error {
++	if opts.Key == "oauth_token" {
++		return errors.New("gh config get oauth_token is disabled and not allowed: this build of gh does not hand out its token")
++	}
++
+ 	// search keyring storage when fetching the `oauth_token` value
+ 	if opts.Hostname != "" && opts.Key == "oauth_token" {
+ 		token, _ := opts.Config.Authentication().ActiveToken(opts.Hostname)

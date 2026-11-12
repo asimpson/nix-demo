@@ -1,0 +1,115 @@
+diff --git a/api/http_client.go b/api/http_client.go
+index c06cbab..a9109de 100644
+--- a/api/http_client.go
++++ b/api/http_client.go
+@@ -85,6 +85,8 @@ func NewHTTPClient(opts HTTPClientOptions) (*http.Client, error) {
+ 		}
+ 	}
+ 
++	client.Transport = writeGuardTransport{wrapped: client.Transport}
++
+ 	return client, nil
+ }
+ 
+diff --git a/api/write_guard.go b/api/write_guard.go
+new file mode 100644
+index 0000000..4d35022
+--- /dev/null
++++ b/api/write_guard.go
+@@ -0,0 +1,96 @@
++package api
++
++import (
++	"bytes"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"path"
++	"regexp"
++	"strings"
++)
++
++// This build of gh refuses to create issues, pull requests and commits.
++// Every gh command, `gh api` included, builds its GitHub client in
++// NewHTTPClient, so checking each request here covers all of them.
++
++const repoPrefix = `(?i)^(/api/v3)?/(repos/[^/]+/[^/]+|repositories/[0-9]+)`
++
++var deniedRESTRequests = []struct {
++	methods string
++	path    *regexp.Regexp
++}{
++	// Issues.
++	{"POST", regexp.MustCompile(repoPrefix + `/(issues|import/issues)$`)},
++	// Pull requests, and Copilot coding agent jobs, which open one.
++	{"POST", regexp.MustCompile(repoPrefix + `/pulls$`)},
++	{"POST", regexp.MustCompile(`(?i)/agents/swe/v[0-9]+/jobs/[^/]+/[^/]+$`)},
++	// Commits.
++	{"POST", regexp.MustCompile(repoPrefix + `/(git/commits|merges|merge-upstream|generate)$`)},
++	{"PUT DELETE", regexp.MustCompile(repoPrefix + `/contents(/.*)?$`)},
++	{"PUT", regexp.MustCompile(repoPrefix + `/pulls/[^/]+/(merge|update-branch)$`)},
++}
++
++var graphQLPath = regexp.MustCompile(`(?i)^(/api)?/graphql$`)
++
++// GraphQL names are made of word characters only, so any occurrence of one
++// of these names as a whole word is that name, whatever aliases, fragments,
++// comments or whitespace surround it.
++var deniedMutations = regexp.MustCompile(`\b(` + strings.Join([]string{
++	"createIssue", "convertProjectCardNoteToIssue", "convertProjectV2DraftIssueItemToIssue",
++	"createPullRequest", "revertPullRequest",
++	"createCommitOnBranch", "mergeBranch", "mergePullRequest", "updatePullRequestBranch",
++	"enablePullRequestAutoMerge", "enqueuePullRequest", "cloneTemplateRepository",
++}, "|") + `)\b`)
++
++type writeGuardTransport struct {
++	wrapped http.RoundTripper
++}
++
++func (t writeGuardTransport) RoundTrip(req *http.Request) (*http.Response, error) {
++	method := strings.ToUpper(req.Method)
++	p := path.Clean("/" + req.URL.Path)
++
++	for _, d := range deniedRESTRequests {
++		if strings.Contains(" "+d.methods+" ", " "+method+" ") && d.path.MatchString(p) {
++			return nil, writeDenied(method + " " + p)
++		}
++	}
++
++	if graphQLPath.MatchString(p) {
++		var body []byte
++		if req.Body != nil {
++			var err error
++			body, err = io.ReadAll(req.Body)
++			req.Body.Close()
++			if err != nil {
++				return nil, err
++			}
++			req.Body = io.NopCloser(bytes.NewReader(body))
++		}
++		for _, q := range []string{graphQLQuery(body), req.URL.Query().Get("query")} {
++			if name := deniedMutations.FindString(q); name != "" {
++				return nil, writeDenied("GraphQL " + name)
++			}
++		}
++	}
++
++	return t.wrapped.RoundTrip(req)
++}
++
++// graphQLQuery returns the query a GraphQL server reads from body: the
++// exact "query" key of a JSON object, the last one if repeated. Any other
++// body is returned whole, so nothing escapes the check.
++func graphQLQuery(body []byte) string {
++	var request map[string]any
++	if json.Unmarshal(body, &request) != nil {
++		return string(body)
++	}
++	q, _ := request["query"].(string)
++	return q
++}
++
++func writeDenied(what string) error {
++	return fmt.Errorf("creating issues, pull requests and commits is disabled and not allowed (%s)", what)
++}

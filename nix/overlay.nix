@@ -1,7 +1,11 @@
-# Overlay replacing git with a build that refuses `git push --force`.
+# Overlay replacing git with a build that refuses `git push --force`, and gh
+# with a build that refuses to create issues, pull requests and commits.
 final: prev: {
   git = import ../third_party/git { inherit (prev) git; };
   gitFull = import ../third_party/git { git = prev.gitFull; };
+
+  # gh that cannot create issues, pull requests or commits.
+  gh = import ../third_party/gh { inherit (prev) gh; };
 
   # nixpkgs derives gitMinimal from the final `git`, and gitMinimal is used at
   # build time all over nixpkgs (hatch-vcs -> python -> llvm -> rustc, ...).

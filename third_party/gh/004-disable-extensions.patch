@@ -1,0 +1,14 @@
+diff --git a/pkg/cmd/extension/manager.go b/pkg/cmd/extension/manager.go
+index 112efad..62fbc8d 100644
+--- a/pkg/cmd/extension/manager.go
++++ b/pkg/cmd/extension/manager.go
+@@ -111,6 +111,9 @@ func (m *Manager) Dispatch(args []string, stdin io.Reader, stdout, stderr io.Wri
+ 		return false, nil
+ 	}
+ 
++	// Extensions run outside gh and could use its token to write.
++	return true, fmt.Errorf("running gh extensions is disabled and not allowed (%s)", extName)
++
+ 	var externalCmd *exec.Cmd
+ 
+ 	if ext.IsBinary() || runtime.GOOS != "windows" {

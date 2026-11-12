@@ -1,5 +1,5 @@
 {
-  description = "git with force push disabled: overlay, NixOS VM test and Docker image";
+  description = "git with force push disabled and gh that cannot create issues, pull requests or commits: overlay, NixOS VM tests and Docker image";
 
   inputs.nixpkgs.url = "github:cachix/devenv-nixpkgs/rolling";
 
@@ -15,14 +15,19 @@
       overlays.default = import ./nix/overlay.nix;
 
       packages = forAllSystems (pkgs: {
-        inherit (pkgs) git gitFull;
+        inherit (pkgs) git gitFull gh;
         dockerImage = import ./nix/docker.nix { inherit pkgs; };
         default = pkgs.git;
       });
 
       checks = forAllSystems (pkgs: {
         git = pkgs.git;
+        gh = pkgs.gh;
         no-force-push = import ./nix/tests/no-force-push.nix { inherit pkgs; };
+        no-gh-writes = import ./nix/tests/no-gh-writes.nix {
+          inherit pkgs;
+          stockGh = nixpkgs.legacyPackages.${pkgs.stdenv.hostPlatform.system}.gh;
+        };
       });
     };
 }
